@@ -430,17 +430,21 @@ let isWaiting   = false;
 let recognition = null;
 let isListening = false;
 
-// ── TTS State ────────────────────────────────────────
-let ttsEnabled  = true;   // on by default
-let ttsVoice    = null;
+// ── TTS — Always ON, localStorage se persist ─────────
+// Default: on. Sirf 'false' string se off hoti hai.
+let ttsEnabled = localStorage.getItem('nova_tts') !== 'false';
+let ttsVoice   = null;
+let audioReady = false;   // browser autoplay unlock flag
+let pendingText = null;   // agar audio unlock se pehle message aaya
 
-// Load best available voice
 function loadVoices() {
   const voices = window.speechSynthesis.getVoices();
-  // Prefer English female/natural voices
-  const preferred = ['Google UK English Female','Google US English','Microsoft Zira','Samantha'];
+  const preferred = [
+    'Google UK English Female', 'Google US English',
+    'Microsoft Zira Desktop', 'Samantha', 'Karen'
+  ];
   for (const name of preferred) {
-    const v = voices.find(v => v.name.includes(name.split(' ')[1]) || v.name === name);
+    const v = voices.find(v => v.name === name || v.name.includes(name.split(' ')[1]));
     if (v) { ttsVoice = v; break; }
   }
   if (!ttsVoice && voices.length) ttsVoice = voices[0];
@@ -448,14 +452,38 @@ function loadVoices() {
 window.speechSynthesis.onvoiceschanged = loadVoices;
 loadVoices();
 
-function speak(text) {
-  if (!ttsEnabled) return;
-  if (!window.speechSynthesis) return;
+// Browser blocks audio until user interacts — this unlocks it silently
+function unlockAudio() {
+  if (audioReady) return;
+  audioReady = true;
+  try {
+    const utt = new SpeechSynthesisUtterance('');
+    utt.volume = 0;
+    utt.onend = () => {
+      // Agar koi pending text tha, ab bolao
+      if (pendingText) { _doSpeak(pendingText); pendingText = null; }
+    };
+    window.speechSynthesis.speak(utt);
+  } catch(e) {}
+}
 
-  // Stop any ongoing speech
+// Call unlock on ANY user interaction (click, keydown, touch)
+['click','keydown','touchstart'].forEach(ev =>
+  document.addEventListener(ev, unlockAudio, {once: true})
+);
+
+function speak(text) {
+  if (!ttsEnabled || !window.speechSynthesis) return;
+  if (!audioReady) {
+    pendingText = text;   // save karo, unlock hone pe bolega
+    return;
+  }
+  _doSpeak(text);
+}
+
+function _doSpeak(text) {
   window.speechSynthesis.cancel();
 
-  // Strip HTML tags, markdown symbols, URLs
   const clean = text
     .replace(/<[^>]*>/g, ' ')
     .replace(/```[\s\S]*?```/g, ' code block. ')
@@ -463,10 +491,10 @@ function speak(text) {
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\*(.+?)\*/g, '$1')
     .replace(/https?:\/\/\S+/g, '')
-    .replace(/[#\-\|→•]/g, ' ')
+    .replace(/[#\|\-→•*]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 500);   // max 500 chars so it doesn't go on forever
+    .slice(0, 400);
 
   if (!clean) return;
 
@@ -476,12 +504,9 @@ function speak(text) {
   utt.volume = 1.0;
   if (ttsVoice) utt.voice = ttsVoice;
 
-  utt.onstart = () => {
-    document.getElementById('speaking-indicator').classList.add('show');
-  };
-  utt.onend = utt.onerror = () => {
-    document.getElementById('speaking-indicator').classList.remove('show');
-  };
+  utt.onstart = () => document.getElementById('speaking-indicator').classList.add('show');
+  utt.onend   = () => document.getElementById('speaking-indicator').classList.remove('show');
+  utt.onerror = () => document.getElementById('speaking-indicator').classList.remove('show');
 
   window.speechSynthesis.speak(utt);
 }
@@ -491,27 +516,30 @@ function stopSpeaking() {
   document.getElementById('speaking-indicator').classList.remove('show');
 }
 
+// Toggle — save to localStorage taake reload pe yaad rahe
 function toggleTTS() {
   ttsEnabled = !ttsEnabled;
+  localStorage.setItem('nova_tts', ttsEnabled ? 'true' : 'false');
   const btn = document.getElementById('tts-btn');
   if (ttsEnabled) {
-    btn.textContent = '🔊';
-    btn.classList.add('tts-on');
-    btn.classList.remove('tts-off');
-    btn.title = 'Awaaz on (click to mute)';
+    btn.textContent = '🔊'; btn.title = 'Awaaz ON — click to mute';
+    btn.classList.add('tts-on'); btn.classList.remove('tts-off');
   } else {
-    btn.textContent = '🔇';
-    btn.classList.add('tts-off');
-    btn.classList.remove('tts-on');
-    btn.title = 'Awaaz off (click to unmute)';
+    btn.textContent = '🔇'; btn.title = 'Awaaz OFF — click to unmute';
+    btn.classList.add('tts-off'); btn.classList.remove('tts-on');
     stopSpeaking();
   }
 }
 
-// Mark TTS button as ON on load
+// Page load pe button ka sahi state set karo
 document.addEventListener('DOMContentLoaded', () => {
   const btn = document.getElementById('tts-btn');
-  if (btn) { btn.classList.add('tts-on'); btn.title = 'Awaaz on (click to mute)'; }
+  if (!btn) return;
+  if (ttsEnabled) {
+    btn.textContent = '🔊'; btn.classList.add('tts-on'); btn.title = 'Awaaz ON — click to mute';
+  } else {
+    btn.textContent = '🔇'; btn.classList.add('tts-off'); btn.title = 'Awaaz OFF — click to unmute';
+  }
 });
 
 socket.on('connect', () => {
@@ -601,6 +629,7 @@ function sendMessage() {
   const text = input.value.trim();
   if (!text || isWaiting) return;
 
+  unlockAudio();   // pehle message send hote hi audio unlock ho jaye
   appendMessage('user', text);
   input.value = '';
   input.style.height = 'auto';
