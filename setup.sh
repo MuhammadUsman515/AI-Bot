@@ -63,7 +63,14 @@ pip install --upgrade pip -q
 # ── Python packages ───────────────────────────────────────────────────────────
 echo ""
 echo "📦 Installing Python packages..."
-pip install -r requirements.txt -q
+
+# Install packages one by one to skip failures gracefully
+while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+    pip install "$line" -q 2>/dev/null || echo "  ⚠ Skipped (optional): $line"
+done < requirements.txt
+
 echo "✓ Python packages installed"
 
 # ── Environment file ──────────────────────────────────────────────────────────

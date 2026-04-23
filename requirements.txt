@@ -20,9 +20,8 @@ Pillow>=10.0.0
 pyperclip>=1.8.2
 screen-brightness-control>=0.22.0
 
-# Media
-pygame>=2.5.2
-opencv-python-headless>=4.8.0
+# Media (optional - install manually if needed: pip install opencv-python-headless)
+# opencv-python-headless>=4.8.0
 
 # Knowledge
 wikipedia>=1.4.0
