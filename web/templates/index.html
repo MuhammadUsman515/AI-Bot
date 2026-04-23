@@ -101,6 +101,24 @@
     color:var(--text);font-size:16px;transition:all .2s;
   }
   .icon-btn:hover{background:var(--border);border-color:var(--nova);}
+  .icon-btn.tts-on{background:rgba(108,99,255,.2);border-color:var(--nova);color:var(--nova);}
+  .icon-btn.tts-off{color:var(--muted);}
+  .speaking-indicator{
+    position:fixed;bottom:100px;right:20px;
+    background:linear-gradient(135deg,var(--nova),var(--nova2));
+    color:#fff;padding:8px 14px;border-radius:20px;font-size:13px;
+    display:none;align-items:center;gap:8px;z-index:99;
+    box-shadow:0 4px 20px rgba(108,99,255,.4);animation:fadeUp .3s ease;
+  }
+  .speaking-indicator.show{display:flex;}
+  .speak-wave{display:flex;gap:3px;align-items:center;}
+  .speak-wave span{width:3px;background:#fff;border-radius:2px;animation:wave .6s infinite;}
+  .speak-wave span:nth-child(1){height:8px;}
+  .speak-wave span:nth-child(2){height:14px;animation-delay:.1s;}
+  .speak-wave span:nth-child(3){height:10px;animation-delay:.2s;}
+  .speak-wave span:nth-child(4){height:16px;animation-delay:.15s;}
+  .speak-wave span:nth-child(5){height:6px;animation-delay:.3s;}
+  @keyframes wave{0%,100%{transform:scaleY(1);}50%{transform:scaleY(.4);}}
 
   /* Tool activity bar */
   .tool-bar{
@@ -329,6 +347,7 @@
         </div>
       </div>
       <div class="topbar-right">
+        <button class="icon-btn" id="tts-btn" onclick="toggleTTS()" title="Nova ki awaaz on/off">🔊</button>
         <button class="icon-btn" onclick="clearChat()" title="Clear chat">🧹</button>
         <button class="icon-btn" onclick="toggleSidebar()" title="Capabilities">⚡</button>
       </div>
@@ -387,6 +406,15 @@
   </main>
 </div>
 
+<!-- Speaking Indicator -->
+<div class="speaking-indicator" id="speaking-indicator">
+  <div class="speak-wave">
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
+  Nova bol raha hai...
+  <button onclick="stopSpeaking()" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:2px 8px;cursor:pointer;font-size:11px;">✕</button>
+</div>
+
 <!-- Voice Overlay -->
 <div class="voice-overlay" id="voice-overlay">
   <div class="voice-ring">🎤</div>
@@ -398,9 +426,93 @@
 <script>
 // ── Socket ───────────────────────────────────────────
 const socket = io();
-let isWaiting = false;
+let isWaiting   = false;
 let recognition = null;
 let isListening = false;
+
+// ── TTS State ────────────────────────────────────────
+let ttsEnabled  = true;   // on by default
+let ttsVoice    = null;
+
+// Load best available voice
+function loadVoices() {
+  const voices = window.speechSynthesis.getVoices();
+  // Prefer English female/natural voices
+  const preferred = ['Google UK English Female','Google US English','Microsoft Zira','Samantha'];
+  for (const name of preferred) {
+    const v = voices.find(v => v.name.includes(name.split(' ')[1]) || v.name === name);
+    if (v) { ttsVoice = v; break; }
+  }
+  if (!ttsVoice && voices.length) ttsVoice = voices[0];
+}
+window.speechSynthesis.onvoiceschanged = loadVoices;
+loadVoices();
+
+function speak(text) {
+  if (!ttsEnabled) return;
+  if (!window.speechSynthesis) return;
+
+  // Stop any ongoing speech
+  window.speechSynthesis.cancel();
+
+  // Strip HTML tags, markdown symbols, URLs
+  const clean = text
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/```[\s\S]*?```/g, ' code block. ')
+    .replace(/`[^`]+`/g, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/[#\-\|→•]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);   // max 500 chars so it doesn't go on forever
+
+  if (!clean) return;
+
+  const utt = new SpeechSynthesisUtterance(clean);
+  utt.rate   = 1.05;
+  utt.pitch  = 1.0;
+  utt.volume = 1.0;
+  if (ttsVoice) utt.voice = ttsVoice;
+
+  utt.onstart = () => {
+    document.getElementById('speaking-indicator').classList.add('show');
+  };
+  utt.onend = utt.onerror = () => {
+    document.getElementById('speaking-indicator').classList.remove('show');
+  };
+
+  window.speechSynthesis.speak(utt);
+}
+
+function stopSpeaking() {
+  window.speechSynthesis.cancel();
+  document.getElementById('speaking-indicator').classList.remove('show');
+}
+
+function toggleTTS() {
+  ttsEnabled = !ttsEnabled;
+  const btn = document.getElementById('tts-btn');
+  if (ttsEnabled) {
+    btn.textContent = '🔊';
+    btn.classList.add('tts-on');
+    btn.classList.remove('tts-off');
+    btn.title = 'Awaaz on (click to mute)';
+  } else {
+    btn.textContent = '🔇';
+    btn.classList.add('tts-off');
+    btn.classList.remove('tts-on');
+    btn.title = 'Awaaz off (click to unmute)';
+    stopSpeaking();
+  }
+}
+
+// Mark TTS button as ON on load
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('tts-btn');
+  if (btn) { btn.classList.add('tts-on'); btn.title = 'Awaaz on (click to mute)'; }
+});
 
 socket.on('connect', () => {
   console.log('Connected to Nova');
@@ -412,6 +524,8 @@ socket.on('nova_message', (data) => {
   hideToolBar();
   appendMessage('nova', data.text, data.type || 'response');
   updateStatus('Tayyar hun!');
+  // 🔊 Speak the response!
+  speak(data.text);
 });
 
 socket.on('tool_activity', (data) => {
