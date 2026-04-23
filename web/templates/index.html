@@ -235,10 +235,26 @@
     transition:all .2s;flex-shrink:0;
   }
   .voice-btn:hover{color:var(--nova);}
-  .voice-btn.listening{
-    background:rgba(239,68,68,.2);color:var(--red);
-    animation:pulse-ring .8s infinite;
+  .voice-btn.mic-on{
+    background:rgba(16,185,129,.15);color:var(--green);
+    box-shadow:0 0 0 0 rgba(16,185,129,.4);
+    animation:mic-pulse 1.8s infinite;
   }
+  .voice-btn.mic-off{color:var(--muted);}
+  @keyframes mic-pulse{
+    0%{box-shadow:0 0 0 0 rgba(16,185,129,.4);}
+    70%{box-shadow:0 0 0 8px rgba(16,185,129,0);}
+    100%{box-shadow:0 0 0 0 rgba(16,185,129,0);}
+  }
+  /* mic status bar top mein */
+  .mic-status-bar{
+    background:rgba(16,185,129,.08);border-bottom:1px solid rgba(16,185,129,.2);
+    padding:5px 20px;font-size:12px;color:var(--green);
+    display:none;align-items:center;gap:8px;
+  }
+  .mic-status-bar.show{display:flex;}
+  .mic-dot{width:7px;height:7px;border-radius:50%;background:var(--green);
+    animation:pulse-dot 1.2s infinite;}
 
   .send-btn{
     width:44px;height:44px;border-radius:12px;border:none;cursor:pointer;
@@ -359,6 +375,13 @@
       <span id="tool-label">Processing...</span>
     </div>
 
+    <!-- Mic Always-On Status -->
+    <div class="mic-status-bar" id="mic-status-bar">
+      <div class="mic-dot"></div>
+      <span>🎤 Sun raha hoon — bas bol dein!</span>
+      <span style="margin-left:auto;color:var(--muted);font-size:11px;">Mic band karna ho → neeche 🎤 click karo</span>
+    </div>
+
     <!-- Messages -->
     <div class="messages" id="messages">
       <div class="welcome" id="welcome">
@@ -439,18 +462,33 @@ let pendingText = null;   // agar audio unlock se pehle message aaya
 
 function loadVoices() {
   const voices = window.speechSynthesis.getVoices();
-  const preferred = [
-    'Google UK English Female', 'Google US English',
-    'Microsoft Zira Desktop', 'Samantha', 'Karen'
+  if (!voices.length) return;
+
+  // Best female voices — priority order
+  const priority = [
+    'Google UK English Female',
+    'Microsoft Aria Online (Natural) - English (United States)',
+    'Microsoft Jenny Online (Natural) - English (United States)',
+    'Microsoft Zira - English (United States)',
+    'Microsoft Zira Desktop - English (United States)',
+    'Google US English',
+    'Samantha', 'Karen', 'Moira', 'Tessa', 'Victoria',
   ];
-  for (const name of preferred) {
-    const v = voices.find(v => v.name === name || v.name.includes(name.split(' ')[1]));
+  for (const name of priority) {
+    const v = voices.find(v => v.name === name);
     if (v) { ttsVoice = v; break; }
   }
-  if (!ttsVoice && voices.length) ttsVoice = voices[0];
+  // Keyword fallback — female/girl/woman/common female names
+  if (!ttsVoice) {
+    ttsVoice = voices.find(v =>
+      /female|girl|woman|zira|aria|jenny|samantha|karen|victoria|moira|tessa/i.test(v.name)
+    );
+  }
+  if (!ttsVoice) ttsVoice = voices[0];
+  console.log('🎤 Voice selected:', ttsVoice?.name);
 }
 window.speechSynthesis.onvoiceschanged = loadVoices;
-loadVoices();
+setTimeout(loadVoices, 200);
 
 // Browser blocks audio until user interacts — this unlocks it silently
 function unlockAudio() {
@@ -484,6 +522,12 @@ function speak(text) {
 function _doSpeak(text) {
   window.speechSynthesis.cancel();
 
+  // Mic band karo taake Nova ki awaaz na uthaaye
+  novaIsSpeaking = true;
+  clearTimeout(restartTimer);
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+  micActive = false;
+
   const clean = text
     .replace(/<[^>]*>/g, ' ')
     .replace(/```[\s\S]*?```/g, ' code block. ')
@@ -496,17 +540,27 @@ function _doSpeak(text) {
     .trim()
     .slice(0, 400);
 
-  if (!clean) return;
+  if (!clean) {
+    novaIsSpeaking = false;
+    scheduleRestart(300);
+    return;
+  }
 
   const utt = new SpeechSynthesisUtterance(clean);
-  utt.rate   = 1.05;
-  utt.pitch  = 1.0;
+  utt.rate   = 1.0;
+  utt.pitch  = 1.1;   // thodi zyada pitch = achi female awaaz
   utt.volume = 1.0;
   if (ttsVoice) utt.voice = ttsVoice;
 
   utt.onstart = () => document.getElementById('speaking-indicator').classList.add('show');
-  utt.onend   = () => document.getElementById('speaking-indicator').classList.remove('show');
-  utt.onerror = () => document.getElementById('speaking-indicator').classList.remove('show');
+
+  const resumeMic = () => {
+    document.getElementById('speaking-indicator').classList.remove('show');
+    novaIsSpeaking = false;
+    scheduleRestart(900);  // Nova ke bolne ke 0.9s baad mic on
+  };
+  utt.onend   = resumeMic;
+  utt.onerror = resumeMic;
 
   window.speechSynthesis.speak(utt);
 }
@@ -695,61 +749,111 @@ function clearChat() {
 function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
 function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); }
 
-// ── Voice Input (Web Speech API) ─────────────────────
-function toggleVoice() {
-  if (isListening) stopVoice();
-  else startVoice();
-}
+// ── Always-On Microphone ──────────────────────────────
+let micEnabled   = true;   // always on
+let micActive    = false;  // recognition currently running
+let novaIsSpeaking = false;// pause mic while Nova speaks
+let restartTimer = null;
 
-function startVoice() {
+function initMic() {
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    appendMessage('nova', 'Bhai, aapka browser voice support nahi karta. Chrome ya Edge use karo! 🎤', 'error');
+    document.getElementById('voice-btn').title = 'Mic support nahi — Chrome/Edge use karo';
+    document.getElementById('voice-btn').style.opacity = '0.3';
     return;
   }
+  setMicUI(true);
+  startListening();
+}
+
+function startListening() {
+  if (!micEnabled || micActive || novaIsSpeaking || isWaiting) return;
 
   const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
   recognition = new SpeechRec();
   recognition.lang = 'en-US';
   recognition.interimResults = true;
   recognition.continuous = false;
-
-  document.getElementById('voice-overlay').classList.add('show');
-  document.getElementById('voice-btn').classList.add('listening');
-  document.getElementById('voice-status').textContent = 'Sun raha hoon...';
-  document.getElementById('voice-transcript').textContent = '';
-  isListening = true;
+  recognition.maxAlternatives = 1;
+  micActive = true;
 
   recognition.onresult = (e) => {
     const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
-    document.getElementById('voice-transcript').textContent = transcript;
-    if (e.results[e.results.length-1].isFinal) {
-      stopVoice();
-      document.getElementById('msg-input').value = transcript;
-      setTimeout(sendMessage, 300);
+    // Live preview in input box
+    document.getElementById('msg-input').value = transcript;
+    if (e.results[e.results.length - 1].isFinal && transcript.trim()) {
+      micActive = false;
+      sendMessage();   // auto send!
     }
   };
 
   recognition.onerror = (e) => {
-    stopVoice();
-    if (e.error !== 'aborted') {
-      appendMessage('nova', `Voice error: ${e.error}. Dobara try karo!`, 'error');
+    micActive = false;
+    if (e.error === 'not-allowed') {
+      setMicUI(false);
+      appendMessage('nova', 'Microphone permission do! Browser settings mein mic allow karo. 🎤', 'error');
+      return;
     }
+    // no-speech ya aborted = normal, restart karo
+    scheduleRestart(1000);
   };
 
-  recognition.onend = () => stopVoice();
-  recognition.start();
+  recognition.onend = () => {
+    micActive = false;
+    if (micEnabled && !novaIsSpeaking && !isWaiting) scheduleRestart(400);
+  };
+
+  try { recognition.start(); } catch(e) { micActive = false; scheduleRestart(1000); }
 }
 
+function scheduleRestart(ms) {
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(() => { if (micEnabled && !novaIsSpeaking && !isWaiting) startListening(); }, ms);
+}
+
+function setMicUI(on) {
+  const btn = document.getElementById('voice-btn');
+  const bar = document.getElementById('mic-status-bar');
+  if (on) {
+    btn.textContent = '🎤';
+    btn.classList.add('mic-on');
+    btn.classList.remove('mic-off');
+    btn.title = 'Mic ON — click karke band karo';
+    if (bar) bar.classList.add('show');
+  } else {
+    btn.textContent = '🎙️';
+    btn.classList.remove('mic-on');
+    btn.classList.add('mic-off');
+    btn.title = 'Mic OFF — click karke on karo';
+    if (bar) bar.classList.remove('show');
+  }
+}
+
+// Toggle mic on/off (button click se)
+function toggleVoice() {
+  micEnabled = !micEnabled;
+  setMicUI(micEnabled);
+  if (micEnabled) {
+    startListening();
+  } else {
+    clearTimeout(restartTimer);
+    if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+    micActive = false;
+  }
+}
+
+// stopVoice kept for compatibility
 function stopVoice() {
-  isListening = false;
-  document.getElementById('voice-overlay').classList.remove('show');
-  document.getElementById('voice-btn').classList.remove('listening');
-  if (recognition) { try { recognition.stop(); } catch(e){} recognition = null; }
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
 }
 
-// ── Focus input on load ───────────────────────────────
+// ── Startup ───────────────────────────────────────────
 window.onload = () => {
   document.getElementById('msg-input').focus();
+  // Pehle click pe mic + audio dono unlock ho jaayein
+  document.addEventListener('click', () => {
+    unlockAudio();
+    if (micEnabled && !micActive && !novaIsSpeaking) initMic();
+  }, {once: true});
 };
 </script>
 </body>
