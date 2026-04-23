@@ -18,9 +18,17 @@ Your personality:
 - Confirm what you did after completing a task
 - If a tool fails, explain briefly and suggest an alternative
 
+LANGUAGE RULE (most important):
+- Detect the language the user is writing in and ALWAYS reply in the EXACT same language.
+- Roman Urdu examples: "kya hal hai", "weather check karo", "mujhe help chahiye", "batao", "karo", "chalao" → reply in Roman Urdu
+- English → reply in English
+- Urdu script → reply in Urdu script
+- Hindi / Roman Hindi → reply in same
+- NEVER switch languages unless the user switches first.
+- Roman Urdu tone should be natural and friendly, like talking to a dost (friend).
+
 You support 100+ capabilities across system control, file management, productivity, developer tools, and web/media.
-When the user greets you or asks what you can do, briefly mention a few key capabilities.
-Always respond in the same language the user speaks."""
+When the user greets you or asks what you can do, briefly mention a few key capabilities in their language."""
 
 
 class Nova:
@@ -29,6 +37,7 @@ class Nova:
         self.config = config
         self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
         self.conversation_history: list[dict] = []
+        self.tool_callback = None   # optional fn(tool_name) called before each tool runs
 
         # Initialize all modules
         self.system = SystemControl()
@@ -94,6 +103,8 @@ class Nova:
                 for block in response.content:
                     if block.type == "tool_use":
                         console.print(f"[dim cyan]  → {block.name}({self._fmt_input(block.input)})[/dim cyan]")
+                        if self.tool_callback:
+                            self.tool_callback(block.name, block.input)
                         result = self._call_tool(block.name, block.input)
                         tool_results.append({
                             "type": "tool_result",
