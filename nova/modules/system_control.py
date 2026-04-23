@@ -478,27 +478,81 @@ class SystemControl:
         return f"Could not find application: {app_name}"
 
     def take_screenshot(self, filename: str = None, region: str = "full") -> str:
-        import datetime
-        if not filename:
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = str(Path.home() / "Pictures" / f"screenshot_{ts}.png")
-        Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        import datetime, os
+
+        # Screenshots folder — web portal se serve hogi
+        ss_dir = Path.home() / "Pictures" / "nova_screenshots"
+        ss_dir.mkdir(parents=True, exist_ok=True)
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"screenshot_{ts}.png"
+        filepath = ss_dir / fname
+
+        # Linux: DISPLAY aur WAYLAND_DISPLAY auto-set
+        if is_linux():
+            if not os.environ.get("DISPLAY"):
+                os.environ["DISPLAY"] = ":0"
+            if not os.environ.get("WAYLAND_DISPLAY"):
+                os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+
+        # Try karo multiple tools — jo pehla kaam kare
+        taken = (
+            self._ss_pyautogui(filepath)
+            or self._ss_scrot(filepath)
+            or self._ss_gnome(filepath)
+            or self._ss_grim(filepath)       # Wayland
+            or self._ss_import(filepath)     # ImageMagick
+            or self._ss_xwd(filepath)        # xwd fallback
+        )
+
+        if taken and filepath.exists():
+            return f"Screenshot le li! [IMG:/screenshots/{fname}]"
+        return (
+            "Screenshot nahi le saka. Possible fixes:\n"
+            "  sudo apt install scrot   (X11)\n"
+            "  sudo apt install grim    (Wayland)\n"
+            "  pip install pyautogui Pillow\n"
+            f"  DISPLAY={os.environ.get('DISPLAY','?')}  WAYLAND={os.environ.get('WAYLAND_DISPLAY','?')}"
+        )
+
+    # ── Screenshot backends ──────────────────────────────
+
+    def _ss_pyautogui(self, path: Path) -> bool:
         try:
             import pyautogui
-            screenshot = pyautogui.screenshot()
-            screenshot.save(filename)
-            return f"Screenshot saved to {filename}"
-        except ImportError:
-            if is_linux():
-                out, err, code = run_command(["scrot", filename])
-                if code == 0:
-                    return f"Screenshot saved to {filename}"
-                out, err, code = run_command(["gnome-screenshot", "-f", filename])
-                if code == 0:
-                    return f"Screenshot saved to {filename}"
-            return f"Screenshot tool not available. Install pyautogui or scrot."
-        except Exception as e:
-            return f"Screenshot error: {e}"
+            pyautogui.screenshot().save(str(path))
+            return path.exists()
+        except Exception:
+            return False
+
+    def _ss_scrot(self, path: Path) -> bool:
+        _, _, code = run_command(["scrot", str(path)])
+        return code == 0 and path.exists()
+
+    def _ss_gnome(self, path: Path) -> bool:
+        _, _, code = run_command(["gnome-screenshot", "-f", str(path)])
+        return code == 0 and path.exists()
+
+    def _ss_grim(self, path: Path) -> bool:
+        _, _, code = run_command(["grim", str(path)])
+        return code == 0 and path.exists()
+
+    def _ss_import(self, path: Path) -> bool:
+        _, _, code = run_command(["import", "-window", "root", str(path)])
+        return code == 0 and path.exists()
+
+    def _ss_xwd(self, path: Path) -> bool:
+        import tempfile
+        xwd_path = str(path).replace(".png", ".xwd")
+        _, _, c1 = run_command(["xwd", "-root", "-silent", "-out", xwd_path])
+        if c1 == 0:
+            _, _, c2 = run_command(["convert", xwd_path, str(path)])
+            try:
+                Path(xwd_path).unlink()
+            except Exception:
+                pass
+            return c2 == 0 and path.exists()
+        return False
 
     def manage_wifi(self, action: str, network_name: str = None, password: str = None) -> str:
         try:

@@ -529,6 +529,7 @@ function _doSpeak(text) {
   micActive = false;
 
   const clean = text
+    .replace(/\[IMG:[^\]]+\]/g, 'Screenshot le li!')  // image tag replace
     .replace(/<[^>]*>/g, ' ')
     .replace(/```[\s\S]*?```/g, ' code block. ')
     .replace(/`[^`]+`/g, '')
@@ -662,6 +663,14 @@ function appendMessage(role, text, type='response') {
 }
 
 function formatText(text) {
+  // Screenshot image tag — [IMG:/screenshots/file.png]
+  text = text.replace(/\[IMG:([^\]]+)\]/g, (_, url) =>
+    `<div style="margin-top:10px">
+       <img src="${url}" style="max-width:100%;border-radius:10px;border:1px solid var(--border);cursor:pointer"
+            onclick="window.open('${url}','_blank')" title="Click to open full size" />
+       <div style="font-size:11px;color:var(--muted);margin-top:4px">🖼️ Click karke full size mein dekho</div>
+     </div>`
+  );
   // Code blocks
   text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
   // Inline code

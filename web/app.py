@@ -2,9 +2,18 @@
 
 import sys
 import os
+from pathlib import Path
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from flask import Flask, render_template, jsonify
+# Desktop display set karo startup pe
+if sys.platform.startswith("linux"):
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = ":0"
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+
+from flask import Flask, render_template, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 from nova.core.config import Config
 from nova.core.assistant import Nova
@@ -12,6 +21,10 @@ from nova.core.assistant import Nova
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "nova-secret-key-2024"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# Screenshots folder
+SCREENSHOTS_DIR = Path.home() / "Pictures" / "nova_screenshots"
+SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Init Nova ─────────────────────────────────────────────────────────────────
 
@@ -35,6 +48,11 @@ def index():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "model": config.model})
+
+@app.route("/screenshots/<path:filename>")
+def serve_screenshot(filename):
+    """Screenshots ko browser mein serve karo"""
+    return send_from_directory(str(SCREENSHOTS_DIR), filename)
 
 
 # ── SocketIO events ───────────────────────────────────────────────────────────
