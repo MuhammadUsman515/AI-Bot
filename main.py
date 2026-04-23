@@ -62,26 +62,24 @@ def main():
     greeting = nova.greet()
     voice.speak(greeting)
 
-    use_voice = not args.text
-    use_tts = not args.no_tts
+    # Auto-detect voice availability
+    use_voice = not args.text and voice.has_voice_input
+    use_tts = not args.no_tts and voice.has_voice_output
+
+    if not args.text and not voice.has_voice_input:
+        console.print("[yellow]⚠ No mic detected — switching to text mode automatically.[/yellow]")
+        console.print("[dim]  To enable voice: pip install pyaudio  or  pip install sounddevice[/dim]\n")
 
     # Print mode info
     mode_parts = []
-    if use_voice:
-        mode_parts.append("🎤 Voice input")
-    else:
-        mode_parts.append("⌨️  Text input")
-    if use_tts:
-        mode_parts.append("🔊 Voice output")
-    else:
-        mode_parts.append("💬 Text output only")
-
+    mode_parts.append("🎤 Voice input" if use_voice else "⌨️  Text input")
+    mode_parts.append("🔊 Voice output" if use_tts else "💬 Text output only")
     console.print(f"\n[dim]{' | '.join(mode_parts)}[/dim]")
 
     if use_voice:
-        console.print(f"[dim]Say '[bold]{config.wake_word}[/bold]' to activate, or type directly. Ctrl+C to quit.[/dim]\n")
+        console.print(f"[dim]Say '[bold]{config.wake_word}[/bold]' to wake me up. Ctrl+C to quit.[/dim]\n")
     else:
-        console.print("[dim]Type your command and press Enter. Type 'quit' to exit. Type 'clear' to reset memory.[/dim]\n")
+        console.print("[dim]Type your command and press Enter. 'quit' = exit | 'clear' = reset memory.[/dim]\n")
 
     # Main loop
     while True:
